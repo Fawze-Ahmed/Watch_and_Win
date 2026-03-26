@@ -10,9 +10,10 @@ const supabase = createClient(import.meta.env.VITE_SUPABASE_URL, import.meta.env
 const OWNER_EMAIL = import.meta.env.VITE_OWNER_EMAIL || 'owner@fth.app'
 const USD_PER_FTH = 0.05
 const MIN_WITHDRAW_FTH = 400
-const MONETAG_SMARTLINK = 'https://omg10.com/4/10787243'
 const ADSTERRA_SOCIAL = 'https://www.profitablecpmratenetwork.com/c9pbs5wp?key=0174285df7755f72377e201ac002d3d0'
-const TASKS = [
+const MONETAG_TAG_SRC = 'https://quge5.com/88/tag.min.js'
+const MONETAG_ZONE = '223440'
+const TASKS: Array<{ id: number; title: string; reward: number; source: Source; cta: string; desc: string }> = [
   { id: 1, title: 'مشاهدة إعلان ممول', reward: 12, source: 'video', cta: 'شاهد الآن', desc: 'افتح الإعلان وأكمل المشاهدة لتحصل على رصيد FTH.' },
   { id: 2, title: 'فتح رابط مختصر', reward: 7, source: 'short_link', cta: 'افتح الرابط', desc: 'افتح الرابط المطلوب ثم ارجع للمنصة لتأكيد المهمة.' },
   { id: 3, title: 'مكافأة يومية', reward: 5, source: 'daily_bonus', cta: 'استلام', desc: 'مكافأة بسيطة للعودة اليومية إلى الموقع.' },
@@ -29,6 +30,7 @@ const state = {
   requests: [] as Array<{ id: string; user_id: string; user_name: string; wallet: string; amount: number; balance: number; status: Status; created_at: string }>,
   threads: [] as Array<{ id: string; user_id: string; user_name: string; user_email: string; status: string; messages: Array<{ id: string; sender: string; text: string; created_at: string }> }>,
   selectedThreadId: '',
+  pendingTask: null as null | { id: number; title: string; reward: number; source: Source; endsAt: number; mode: 'external' | 'onsite' },
   wallet: '',
   amount: '',
   userMsg: '',
@@ -36,6 +38,8 @@ const state = {
 }
 
 let realtime: RealtimeChannel | null = null
+let adPopup: Window | null = null
+let timerId: number | null = null
 
 const seed = (() => {
   const key = localStorage.getItem('fth-key') || crypto.randomUUID()
@@ -97,6 +101,35 @@ async function boot() {
   } catch (e: any) { note(e.message || 'خطأ غير متوقع', 'error'); state.loading = false; render() }
 }
 
+function ensureTimer() {
+  if (timerId !== null) return
+  timerId = window.setInterval(() => {
+    if (!state.pendingTask) return
+    render()
+    if (Date.now() >= state.pendingTask.endsAt) {
+      window.clearInterval(timerId!)
+      timerId = null
+      render()
+    }
+  }, 1000)
+}
+
+function remainingSeconds() {
+  if (!state.pendingTask) return 0
+  return Math.max(0, Math.ceil((state.pendingTask.endsAt - Date.now()) / 1000))
+}
+
+function loadMonetagInlineAd() {
+  const existing = document.querySelector('script[data-zone="223440"]')
+  if (existing) return
+  const script = document.createElement('script')
+  script.src = MONETAG_TAG_SRC
+  script.async = true
+  script.dataset.zone = MONETAG_ZONE
+  script.dataset.cfasync = 'false'
+  document.body.appendChild(script)
+}
+
 function registerMonetagServiceWorker() {
   if (!('serviceWorker' in navigator)) return
   navigator.serviceWorker.register('/sw.js').catch(() => undefined)
@@ -104,11 +137,64 @@ function registerMonetagServiceWorker() {
 
 async function doTask(id: number) {
   const t = TASKS.find((x) => x.id === id); if (!t || !state.profile || state.busy) return
+  if (t.source === 'daily_bonus') {
+    state.busy = true; render()
+    const { error } = await supabase.from('wallet_transactions').insert({ user_id: state.profile.id, source: t.source, amount: t.reward, status: 'completed', notes: t.title })
+    if (error) note(error.message, 'error'); else { note(`تمت إضافة ${t.reward} FTH`, 'success'); await loadData() }
+    state.busy = false; render()
+    return
+  }
+  if (state.pendingTask) {
+    note('هناك مهمة إعلانية قيد الانتظار بالفعل. أكملها أولًا.', 'error')
+    render()
+    return
+  }
   state.busy = true; render()
-  if (t.source === 'video') window.open(ADSTERRA_SOCIAL, '_blank', 'noopener,noreferrer')
-  if (t.source === 'short_link') window.open(MONETAG_SMARTLINK, '_blank', 'noopener,noreferrer')
-  const { error } = await supabase.from('wallet_transactions').insert({ user_id: state.profile.id, source: t.source, amount: t.reward, status: 'completed', notes: t.title })
-  if (error) note(error.message, 'error'); else { note(`تمت إضافة ${t.reward} FTH`, 'success'); await loadData() }
+  if (t.source === 'video') {
+    adPopup = window.open(ADSTERRA_SOCIAL, '_blank', 'noopener,noreferrer')
+    if (!adPopup) {
+      note('المتصفح منع فتح الإعلان. اسمح بالنوافذ المنبثقة ثم حاول مرة أخرى.', 'error')
+      state.busy = false; render()
+      return
+    }
+  }
+  if (t.source === 'short_link') loadMonetagInlineAd()
+  state.pendingTask = {
+    id: t.id,
+    title: t.title,
+    reward: t.reward,
+    source: t.source,
+    endsAt: Date.now() + 60000,
+    mode: t.source === 'video' ? 'external' : 'onsite',
+  }
+  note('بدأت جلسة التتبع. يجب انتظار 60 ثانية قبل احتساب الربح.', 'success')
+  ensureTimer()
+  state.busy = false; render()
+}
+
+async function claimPendingReward() {
+  if (!state.profile || !state.pendingTask || state.busy) return
+  if (remainingSeconds() > 0) {
+    note('لم ينته المؤقت بعد.', 'error')
+    render()
+    return
+  }
+  state.busy = true; render()
+  const task = state.pendingTask
+  const { error } = await supabase.from('wallet_transactions').insert({
+    user_id: state.profile.id,
+    source: task.source,
+    amount: task.reward,
+    status: 'completed',
+    notes: `${task.title} after 60 second timer`,
+  })
+  if (error) note(error.message, 'error')
+  else {
+    note(`تم احتساب ${task.reward} FTH بعد انتهاء التتبع.`, 'success')
+    state.pendingTask = null
+    adPopup = null
+    await loadData()
+  }
   state.busy = false; render()
 }
 
@@ -199,7 +285,7 @@ const dashboard = () => {
   return shell(`<section class="section"><div class="dash-head"><article class="wallet"><span class="kicker">رصيدك</span><h1>${fmtCoin(currentBalance())}</h1><p>القيمة التقريبية: ${fmtUsd(currentBalance() * USD_PER_FTH)}</p></article><div class="stats"><article class="metric"><span>الإعلانات</span><strong>${ads}</strong></article><article class="metric"><span>الروابط</span><strong>${links}</strong></article><article class="metric"><span>طلبات السحب</span><strong>${myReqs}</strong></article><article class="metric"><span>البريد</span><strong>${state.profile?.email || '-'}</strong></article></div></div><div class="dash-links">${[['earn','قسم الأرباح'],['withdraw','قسم السحب'],['store','المتجر'],['mining','التعدين'],['contact','التواصل'],['admin','لوحة الأدمن']].map(([p,l])=>`<button class="dash-btn" data-page="${p}">${l}</button>`).join('')}</div><div class="list">${state.activities.length?state.activities.map((a)=>`<article class="row"><div><strong>${sourceLabel(a.source)}</strong><p>${fmtDate(a.created_at)}</p></div><div class="row-end"><span class="${a.amount>=0?'positive':'negative'}">${a.amount>=0?'+':''}${fmtCoin(a.amount)}</span><span class="pill">${statusLabel(a.status)}</span></div></article>`).join(''):'<p class="empty">لا توجد عمليات بعد.</p>'}</div></section>`)
 }
 
-const earn = () => shell(`<section class="section"><div class="section-head"><span class="kicker">قسم الأرباح</span><h1 class="title">الإعلانات والروابط المختصرة</h1></div><div class="features">${TASKS.map((t)=>`<article class="card"><h3>${t.title}</h3><p>${t.desc}</p><div class="action-row"><strong>${fmtCoin(t.reward)}</strong><button class="primary small" data-task="${t.id}" ${state.busy?'disabled':''}>${t.cta}</button></div></article>`).join('')}</div></section>`)
+const earn = () => shell(`<section class="section"><div class="section-head"><span class="kicker">قسم الأرباح</span><h1 class="title">الإعلانات والروابط المختصرة</h1></div>${state.pendingTask?`<article class="card tracker-card"><h3>جلسة تتبع نشطة</h3><p>المهمة: ${state.pendingTask.title}</p><p>الوقت المتبقي: ${remainingSeconds()} ثانية</p><p>${state.pendingTask.mode==='external'?'اترك صفحة الإعلان مفتوحة أو عد بعد مرور الدقيقة ثم اضغط احتساب المكافأة.':'الإعلان من Monetag يظهر داخل الموقع، اترك الصفحة مفتوحة حتى ينتهي المؤقت.'}</p><div class="action-row"><button class="primary small" id="claim-reward" ${remainingSeconds()>0||state.busy?'disabled':''}>احتساب المكافأة</button></div></article>`:''}<div class="features">${TASKS.map((t)=>`<article class="card"><h3>${t.title}</h3><p>${t.desc}</p><div class="action-row"><strong>${fmtCoin(t.reward)}</strong><button class="primary small" data-task="${t.id}" ${(state.busy||!!state.pendingTask)&&t.source!=='daily_bonus'?'disabled':''}>${t.cta}</button></div></article>`).join('')}</div><div class="card monetag-box"><h3>منطقة إعلان Monetag</h3><p>هذه المنطقة مخصصة للإعلان المدمج الخاص بـMonetag للمهمة المرتبطة بالروابط المختصرة.</p><div id="monetag-slot" class="ad-slot">سيظهر الإعلان هنا بعد تحميل كود Monetag.</div></div></section>`)
 const withdraw = () => shell(`<section class="section"><div class="section-head"><span class="kicker">قسم السحب</span><h1 class="title">سحب عملة FTH</h1><p class="lead">يمكنك السحب عند وصول رصيدك إلى ${fmtUsd(20)} أو أكثر.</p></div><div class="grid2"><article class="card"><h3>إرسال طلب سحب</h3><div class="auth-grid"><input id="wallet" placeholder="رابط المحفظة" value="${state.wallet}"><input id="amount" type="number" placeholder="المبلغ بـ FTH" value="${state.amount}"><button id="send-withdraw" class="primary" ${state.busy?'disabled':''}>إرسال طلب السحب</button></div><p class="tiny">رصيدك الحالي: ${fmtCoin(currentBalance())}</p></article><article class="card"><h3>طلباتك</h3><div class="list compact">${state.requests.filter((r)=>r.user_id===state.profile?.id).map((r)=>`<article class="row"><div><strong>${r.wallet}</strong><p>${fmtDate(r.created_at)}</p></div><div class="row-end"><span>${fmtCoin(r.amount)}</span><span class="pill">${statusLabel(r.status)}</span></div></article>`).join('') || '<p class="empty">لا توجد طلبات حتى الآن.</p>'}</div></article></div></section>`)
 const coming = (t: string, d: string) => shell(`<section class="section narrow"><article class="coming"><span class="kicker">Under Development</span><h1>${t}</h1><p>${d}</p><div class="badge">تحت التطوير</div></article></section>`)
 const contact = () => { const th = state.threads.find((x)=>x.user_id===state.profile?.id); return shell(`<section class="section grid2"><article class="card"><h2>التواصل معنا</h2><div class="chat">${(th?.messages||[]).map((m)=>`<div class="bubble ${m.sender}"><p>${m.text}</p><span>${fmtDate(m.created_at)}</span></div>`).join('') || '<p class="empty">ابدأ أول رسالة.</p>'}</div><form id="user-form" class="msg-row"><input id="user-input" placeholder="اكتب رسالتك هنا..." value="${state.userMsg}"><button class="primary small" ${state.busy?'disabled':''}>إرسال</button></form></article><article class="card"><h3>نبذة عن الدعم</h3><p>كل رسالة تذهب إلى لوحة الأدمن مباشرة، ويمكن الرد عليها من داخل الموقع.</p></article></section>`) }
@@ -214,6 +300,7 @@ function render() {
 function bind() {
   document.querySelectorAll<HTMLElement>('[data-page]').forEach((e) => e.onclick = () => { state.page = e.dataset.page as Page; render() })
   document.querySelectorAll<HTMLElement>('[data-task]').forEach((e) => e.onclick = () => void doTask(Number(e.dataset.task)))
+  document.querySelector<HTMLButtonElement>('#claim-reward')?.addEventListener('click', () => void claimPendingReward())
   document.querySelector<HTMLInputElement>('#wallet')?.addEventListener('input', (e) => state.wallet = (e.currentTarget as HTMLInputElement).value)
   document.querySelector<HTMLInputElement>('#amount')?.addEventListener('input', (e) => state.amount = (e.currentTarget as HTMLInputElement).value)
   document.querySelector<HTMLButtonElement>('#send-withdraw')?.addEventListener('click', () => void sendWithdraw())

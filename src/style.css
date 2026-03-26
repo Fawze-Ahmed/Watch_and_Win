@@ -82,6 +82,12 @@ button:disabled { cursor: not-allowed; opacity: 0.7; }
 .dash-head { grid-template-columns: 0.95fr 1.05fr; }
 
 .card, .wallet, .coming, .auth-card { padding: 22px; }
+.tracker-card { border-color: #bfdbfe; background: linear-gradient(180deg, #eff6ff, #ffffff); }
+.monetag-box { margin-top: 18px; }
+.ad-slot {
+  min-height: 120px; margin-top: 12px; border: 1px dashed #b7c7db; border-radius: 16px;
+  background: #f8fbff; display: grid; place-items: center; color: var(--muted); text-align: center; padding: 20px;
+}
 .wallet { background: linear-gradient(135deg, #102033, #18314f); color: #fff; min-height: 220px; }
 .wallet .kicker, .wallet p { color: rgba(255,255,255,0.78); }
 .wallet h1 { margin: 8px 0; font-size: clamp(2rem, 3vw, 3.2rem); }
