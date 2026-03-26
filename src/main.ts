@@ -11,6 +11,7 @@ const OWNER_EMAIL = import.meta.env.VITE_OWNER_EMAIL || 'owner@fth.app'
 const USD_PER_FTH = 0.05
 const MIN_WITHDRAW_FTH = 400
 const MONETAG_SMARTLINK = 'https://omg10.com/4/10787243'
+const ADSTERRA_SOCIAL = 'https://www.profitablecpmratenetwork.com/c9pbs5wp?key=0174285df7755f72377e201ac002d3d0'
 const TASKS = [
   { id: 1, title: 'مشاهدة إعلان ممول', reward: 12, source: 'video', cta: 'شاهد الآن', desc: 'افتح الإعلان وأكمل المشاهدة لتحصل على رصيد FTH.' },
   { id: 2, title: 'فتح رابط مختصر', reward: 7, source: 'short_link', cta: 'افتح الرابط', desc: 'افتح الرابط المطلوب ثم ارجع للمنصة لتأكيد المهمة.' },
@@ -104,6 +105,7 @@ function registerMonetagServiceWorker() {
 async function doTask(id: number) {
   const t = TASKS.find((x) => x.id === id); if (!t || !state.profile || state.busy) return
   state.busy = true; render()
+  if (t.source === 'video') window.open(ADSTERRA_SOCIAL, '_blank', 'noopener,noreferrer')
   if (t.source === 'short_link') window.open(MONETAG_SMARTLINK, '_blank', 'noopener,noreferrer')
   const { error } = await supabase.from('wallet_transactions').insert({ user_id: state.profile.id, source: t.source, amount: t.reward, status: 'completed', notes: t.title })
   if (error) note(error.message, 'error'); else { note(`تمت إضافة ${t.reward} FTH`, 'success'); await loadData() }
