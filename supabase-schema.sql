@@ -29,11 +29,11 @@ create table wallet_transactions (
 create table redeem_requests (
   id uuid primary key default gen_random_uuid(),
   user_id uuid not null references profiles(id) on delete cascade,
-  reward_type text not null check (reward_type in ('gift_card', 'featured_access')),
+  reward_type text not null check (reward_type in ('withdrawal', 'gift_card')),
   coin_amount integer not null check (coin_amount > 0),
   payout_details text,
-  network text default 'internal',
-  status text not null default 'pending' check (status in ('pending', 'processing', 'approved', 'completed')),
+  network text default 'manual',
+  status text not null default 'pending' check (status in ('pending', 'processing', 'approved', 'completed', 'rejected')),
   created_at timestamptz not null default now()
 );
 
@@ -102,29 +102,6 @@ create trigger support_message_touch_thread
 after insert on support_messages
 for each row
 execute function sync_thread_updated_at();
-
-create or replace function create_reward_redeem_request(
-  p_user_id uuid,
-  p_reward_label text,
-  p_coin_amount integer default 500,
-  p_network text default 'internal'
-)
-returns uuid
-language plpgsql
-as $$
-declare
-  request_id uuid;
-begin
-  insert into redeem_requests (user_id, reward_type, coin_amount, payout_details, network, status)
-  values (p_user_id, 'featured_access', p_coin_amount, p_reward_label, p_network, 'pending')
-  returning id into request_id;
-
-  insert into wallet_transactions (user_id, source, amount, status, notes)
-  values (p_user_id, 'redeem', -p_coin_amount, 'pending', 'Internal reward redeem request');
-
-  return request_id;
-end;
-$$;
 
 alter table profiles replica identity full;
 alter table wallet_transactions replica identity full;
