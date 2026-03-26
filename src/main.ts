@@ -10,6 +10,7 @@ const supabase = createClient(import.meta.env.VITE_SUPABASE_URL, import.meta.env
 const OWNER_EMAIL = import.meta.env.VITE_OWNER_EMAIL || 'owner@fth.app'
 const USD_PER_FTH = 0.05
 const MIN_WITHDRAW_FTH = 400
+const MONETAG_SMARTLINK = 'https://omg10.com/4/10787243'
 const TASKS = [
   { id: 1, title: 'مشاهدة إعلان ممول', reward: 12, source: 'video', cta: 'شاهد الآن', desc: 'افتح الإعلان وأكمل المشاهدة لتحصل على رصيد FTH.' },
   { id: 2, title: 'فتح رابط مختصر', reward: 7, source: 'short_link', cta: 'افتح الرابط', desc: 'افتح الرابط المطلوب ثم ارجع للمنصة لتأكيد المهمة.' },
@@ -95,9 +96,15 @@ async function boot() {
   } catch (e: any) { note(e.message || 'خطأ غير متوقع', 'error'); state.loading = false; render() }
 }
 
+function registerMonetagServiceWorker() {
+  if (!('serviceWorker' in navigator)) return
+  navigator.serviceWorker.register('/sw.js').catch(() => undefined)
+}
+
 async function doTask(id: number) {
   const t = TASKS.find((x) => x.id === id); if (!t || !state.profile || state.busy) return
   state.busy = true; render()
+  if (t.source === 'short_link') window.open(MONETAG_SMARTLINK, '_blank', 'noopener,noreferrer')
   const { error } = await supabase.from('wallet_transactions').insert({ user_id: state.profile.id, source: t.source, amount: t.reward, status: 'completed', notes: t.title })
   if (error) note(error.message, 'error'); else { note(`تمت إضافة ${t.reward} FTH`, 'success'); await loadData() }
   state.busy = false; render()
@@ -217,4 +224,5 @@ function bind() {
   document.querySelector<HTMLFormElement>('#owner-form')?.addEventListener('submit', (e) => { e.preventDefault(); void sendOwnerMessage() })
 }
 
+registerMonetagServiceWorker()
 boot()
